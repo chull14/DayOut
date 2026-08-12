@@ -1,4 +1,4 @@
 export const mongoConfig = {
   serverUrl: 'mongodb://localhost:27017/',
-  database: 'dayoutNYC'
+  database: 'dayout-1-1'
 };

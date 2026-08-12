@@ -2,6 +2,10 @@ import { Router } from 'express'
 const router = Router();
 import friendData from '../data/friends.js'
 import { checkId } from '../helpers.js';
+import { requireLogin } from '../middleware/auth.js';
+
+// Every friends route needs an authenticated user.
+router.use(requireLogin);
 
 router.get('/', async (req, res) => {
   // GET all friends

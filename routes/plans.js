@@ -8,6 +8,10 @@ import { getLocationById } from '../data/locations.js';
 import { locations } from '../config/mongoCollections.js';
 import distance from '@turf/distance';
 import { checkId } from '../helpers.js';
+import { requireLogin } from '../middleware/auth.js';
+
+// Every plans route needs an authenticated user.
+router.use(requireLogin);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const seedLocationsPath = path.join(__dirname, '..', 'seed-data', 'locations.json');
