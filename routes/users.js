@@ -184,12 +184,10 @@ router.get('/profile', requireLogin, async function (req, res) {
       email: user.email,
       favoriteLocations: user.favoriteLocations,
       favoriteSpots,
-      friends: user.friends,
+      friends: friendsList,
       createdAt: user.createdAt,
       plans,
-      savedPlans,
-      friends: friendsList,
-      createdAt: user.createdAt
+      savedPlans
     });
   } catch (e) {
     return res.status(500).render('error', {
