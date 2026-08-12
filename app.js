@@ -3,6 +3,7 @@ import session from 'express-session';
 import { engine } from 'express-handlebars';
 import configRoutes from './routes/index.js';
 import methodOverride from 'method-override'
+import friendData from './data/friends.js';
 
 const app = express();
 
@@ -48,6 +49,21 @@ app.use(session({
 // makes session user available in every handlebars template
 app.use((req, res, next) => {
   res.locals.user = req.session.user;
+  next();
+});
+
+// Expose the logged-in user's pending friend-request count to every view so
+// the navbar can show a badge. Kept resilient: a lookup failure just hides the
+// badge rather than breaking the page.
+app.use(async (req, res, next) => {
+  res.locals.pendingRequestCount = 0;
+  if (req.session.user) {
+    try {
+      res.locals.pendingRequestCount = await friendData.getPendingCount(req.session.user._id);
+    } catch (e) {
+      res.locals.pendingRequestCount = 0;
+    }
+  }
   next();
 });
 

@@ -129,6 +129,18 @@ const exportedMethods = {
     return pending
   },
 
+  async getPendingCount(userId) {
+    // Lightweight count for the navbar badge — reads only the pendingRequests
+    // array length, no second lookup of the requester documents.
+    userId = checkId(userId)
+    const userCollection = await users()
+    const user = await userCollection.findOne(
+      { _id: new ObjectId(userId) },
+      { projection: { pendingRequests: 1 } }
+    )
+    return (user?.pendingRequests || []).length
+  },
+
   async searchUsers(query, currentUserId) {
     currentUserId = checkId(currentUserId)
     if (typeof query !== 'string' || query.trim().length === 0)

@@ -4,6 +4,7 @@ import { getFavoriteLocationsForUser } from '../data/locations.js';
 import { requireLogin, requireGuest, requireAdmin } from '../middleware/auth.js';
 import planData from '../data/plans.js';
 import friendData from '../data/friends.js';
+import { checkId } from '../helpers.js';
 import xss from 'xss';
 
 const router = Router();
@@ -197,6 +198,39 @@ router.get('/profile', requireLogin, async function (req, res) {
       title: 'Error',
       error: e
     });
+  }
+});
+
+// GET /profile/:userId — a public view of another member: name, favorite
+// spots, and their PUBLIC plans only. Never exposes email or private plans.
+router.get('/profile/:userId', requireLogin, async function (req, res) {
+  try {
+    const viewerId = req.session.user._id;
+    const targetId = checkId(req.params.userId);
+
+    // Your own public profile is just your profile.
+    if (targetId === viewerId) return res.redirect('/profile');
+
+    const user = await getUserById(targetId);
+    const favoriteSpots = await getFavoriteLocationsForUser(targetId);
+    const publicPlans = await planData.getPublicPlansByUser(targetId);
+    const myFriends = await friendData.getFriends(viewerId);
+    const isFriend = myFriends.some((f) => f._id.toString() === targetId);
+
+    res.render('publicProfile', {
+      title: `${user.firstName} ${user.lastName}`,
+      profileId: targetId,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      createdAt: user.createdAt,
+      favoriteSpots,
+      publicPlans,
+      isFriend
+    });
+  } catch (e) {
+    const message = typeof e === 'string' ? e : e.message || 'Unable to load profile';
+    const status = /no user found|not a valid id/i.test(message) ? 404 : 500;
+    return res.status(status).render('error', { title: 'Error', error: message });
   }
 });
 

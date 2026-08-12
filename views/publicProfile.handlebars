@@ -1,0 +1,39 @@
+<section class="profile-page">
+  <h1>{{firstName}} {{lastName}}</h1>
+  <p class="muted">Member since {{createdAt}}{{#if isFriend}} &middot; Your friend{{/if}}</p>
+
+  {{#unless isFriend}}
+  <form method="POST" action="/friends/request/{{profileId}}">
+    <button type="submit">Add Friend</button>
+  </form>
+  {{/unless}}
+
+  <div class="profile-card">
+    <h2>Favorite Spots</h2>
+    {{#if favoriteSpots.length}}
+    <ul>
+      {{#each favoriteSpots}}
+      <li><a href="/explore/{{this._id}}">{{this.name}}</a> ({{this.type}})</li>
+      {{/each}}
+    </ul>
+    {{else}}
+    <p>No favorite spots yet.</p>
+    {{/if}}
+  </div>
+
+  <div class="profile-card">
+    <h2>Public Plans</h2>
+    {{#if publicPlans.length}}
+    <ul>
+      {{#each publicPlans}}
+      <li>
+        <a href="/plans/{{this._id}}">{{this.title}}</a>
+        {{#if this.date}} - {{this.date}}{{/if}}
+      </li>
+      {{/each}}
+    </ul>
+    {{else}}
+    <p>No public plans yet.</p>
+    {{/if}}
+  </div>
+</section>

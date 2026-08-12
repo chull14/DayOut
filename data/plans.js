@@ -86,6 +86,17 @@ const exportedMethods = {
     }))
   },
 
+  async getPublicPlansByUser(userId) {
+    // GET — a single user's public plans, newest first. Powers public profiles.
+    userId = checkId(userId)
+    const planCollection = await plans()
+    const list = await planCollection
+      .find({ userId: new ObjectId(userId), isPublic: true })
+      .sort({ createdAt: -1 })
+      .toArray()
+    return list.map(serializePlan)
+  },
+
   async clonePlan(planId, newOwnerId) {
     // POST — copy a plan into the requester's own plans. Clones start private
     // and active so the new owner can edit before re-sharing. You may clone
