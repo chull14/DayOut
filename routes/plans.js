@@ -203,6 +203,30 @@ router.get('/all', async (req, res) => { // DONE
   }
 })
 
+router.get('/feed', async (req, res) => {
+  // Social feed: friends' public plans. Declared before '/:planId' so the
+  // literal '/feed' path isn't captured as a planId.
+  try {
+    const userId = checkId(req.session.user._id)
+    const feedPlans = await planData.getFriendsPublicPlans(userId)
+    res.render('feed', { title: "Friends' Plans", feedPlans })
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/clone', async (req, res) => {
+  // Copy a friend's public plan (or one of your own) into your plans.
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    const clone = await planData.clonePlan(planId, userId)
+    res.redirect(`/plans/${clone._id}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
 router.post('/activities', async (req, res) => {
   const locationId = req.body?.locationId
 

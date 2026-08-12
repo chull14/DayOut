@@ -1,4 +1,4 @@
-import { plans } from '../config/mongoCollections.js'
+import { plans, users } from '../config/mongoCollections.js'
 import { ObjectId } from 'mongodb'
 import { checkId, checkDate, checkString, checkTime } from '../helpers.js'
 
@@ -36,6 +36,85 @@ const exportedMethods = {
     const planCollection = await plans()
     const all = await planCollection.find({ userId: new ObjectId(userId) }).toArray()
     return all.map(serializePlan)
+  },
+
+  async getFriendsPublicPlans(userId) {
+    // GET — the social feed: every public plan authored by one of my friends,
+    // newest first, tagged with the author's display name + a stop count.
+    userId = checkId(userId)
+    const userCollection = await users()
+    const me = await userCollection.findOne(
+      { _id: new ObjectId(userId) },
+      { projection: { friends: 1 } }
+    )
+    const friendIds = me?.friends || []
+    if (friendIds.length === 0) return []
+
+    const planCollection = await plans()
+    const feedPlans = await planCollection
+      .find({ userId: { $in: friendIds }, isPublic: true })
+      .sort({ createdAt: -1 })
+      .toArray()
+    if (feedPlans.length === 0) return []
+
+    // One round-trip to resolve author names for every plan in the feed.
+    const authorIds = [...new Set(feedPlans.map((p) => p.userId.toString()))]
+      .map((id) => new ObjectId(id))
+    const authors = await userCollection
+      .find({ _id: { $in: authorIds } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      authors.map((a) => [a._id.toString(), `${a.firstName} ${a.lastName}`.trim()])
+    )
+
+    return feedPlans.map((p) => ({
+      ...serializePlan(p),
+      authorName: nameById.get(p.userId.toString()) || 'A friend',
+      activityCount: Array.isArray(p.activities) ? p.activities.length : 0
+    }))
+  },
+
+  async clonePlan(planId, newOwnerId) {
+    // POST — copy a plan into the requester's own plans. Clones start private
+    // and active so the new owner can edit before re-sharing. You may clone
+    // your own plan or any public one; private plans you don't own are off-limits.
+    planId = checkId(planId)
+    newOwnerId = checkId(newOwnerId)
+
+    const planCollection = await plans()
+    const source = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!source) throw { status: 404, message: 'Plan not found' }
+
+    if (source.userId.toString() !== newOwnerId && !source.isPublic)
+      throw { status: 403, message: 'This plan is private' }
+
+    const clonedActivities = Array.isArray(source.activities)
+      ? source.activities.map((a) => ({
+          _id: new ObjectId(),
+          locationId: a.locationId ? new ObjectId(a.locationId) : a.locationId,
+          locationName: a.locationName,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          notes: a.notes ?? ''
+        }))
+      : []
+
+    const now = new Date()
+    const copy = {
+      userId: new ObjectId(newOwnerId),
+      title: `Copy of ${source.title}`,
+      date: source.date,
+      status: 'active',
+      isPublic: false,
+      activities: clonedActivities,
+      photos: [],
+      clonedFrom: new ObjectId(planId),
+      createdAt: now,
+      updatedAt: now
+    }
+
+    const inserted = await planCollection.insertOne(copy)
+    return await this.getPlanById(inserted.insertedId.toString())
   },
 
   async getPlanById(planId) {
