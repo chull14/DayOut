@@ -5,7 +5,7 @@
 {{#each feedPlans}}
 <div class="feed-plan">
   <h3><a href="/plans/{{this._id}}">{{this.title}}</a></h3>
-  <p>by {{this.authorName}} &middot; {{this.date}} &middot; {{this.activityCount}} stop{{#unless (eq this.activityCount 1)}}s{{/unless}}</p>
+  <p>by {{this.authorName}} &middot; {{this.date}} &middot; {{this.activityCount}} stop{{#unless (eq this.activityCount 1)}}s{{/unless}} &middot; &#128077; {{this.reactionCount}} &middot; &#128172; {{this.commentCount}}</p>
   <form method="POST" action="/plans/{{this._id}}/clone">
     <button type="submit">Copy to my plans</button>
   </form>

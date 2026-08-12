@@ -9,6 +9,7 @@ import { locations } from '../config/mongoCollections.js';
 import distance from '@turf/distance';
 import { checkId } from '../helpers.js';
 import { requireLogin } from '../middleware/auth.js';
+import xss from 'xss';
 
 // Every plans route needs an authenticated user.
 router.use(requireLogin);
@@ -227,6 +228,44 @@ router.post('/:planId/clone', async (req, res) => {
   }
 })
 
+router.post('/:planId/react', async (req, res) => {
+  // Toggle a 👍 on a plan you can see (your own or a public one).
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    await planData.toggleReaction(planId, userId)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/comments', async (req, res) => {
+  // Add a comment to a plan you can see.
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    const authorName = `${req.session.user.firstName || ''} ${req.session.user.lastName || ''}`.trim()
+    const text = xss(req.body?.text || '')
+    await planData.addComment(planId, userId, authorName, text)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/comments/:commentId', async (req, res) => {
+  // Delete a comment (author, plan owner, or admin).
+  try {
+    const planId = checkId(req.params.planId)
+    const commentId = checkId(req.params.commentId)
+    await planData.deletePlanComment(planId, commentId, req.session.user)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
 router.post('/activities', async (req, res) => {
   const locationId = req.body?.locationId
 
@@ -295,14 +334,34 @@ router.route('/:planId') // plan specific page
       })
 
       const isOwner = plan.userId.toString() === userId
+      const isAdmin = req.session.user.role === 'admin'
       const travel = await computeTravelEstimates(plan.activities || []);
+
+      // Reactions + comments view data (comments newest first).
+      const reactions = plan.reactions || []
+      const reactionCount = reactions.length
+      const hasReacted = reactions.some((r) => r.toString() === userId)
+      const comments = (plan.comments || [])
+        .slice()
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map((c) => ({
+          _id: c._id.toString(),
+          authorName: c.authorName,
+          text: c.text,
+          createdAt: c.createdAt,
+          canDelete: c.userId.toString() === userId || isOwner || isAdmin
+        }))
+
       res.render('plans', {
         title: 'Current Plan',
         plan,
         isOwner,
         travelLegs: travel.travelLegs,
         totalTravelMinutes: travel.totalTravelMinutes,
-        unknownLegCount: travel.unknownLegCount
+        unknownLegCount: travel.unknownLegCount,
+        reactionCount,
+        hasReacted,
+        comments
       })
     } catch (e) {
       res.status(e.status || 500).render('error', { error: e.message || e })

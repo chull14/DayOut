@@ -19,6 +19,16 @@ function serializePlan(plan) {
       locationId: a.locationId?.toString?.() ?? a.locationId
     }))
   }
+  if (Array.isArray(plan.reactions)) {
+    out.reactions = plan.reactions.map((r) => r?.toString?.() ?? r)
+  }
+  if (Array.isArray(plan.comments)) {
+    out.comments = plan.comments.map((c) => ({
+      ...c,
+      _id: c._id?.toString?.() ?? c._id,
+      userId: c.userId?.toString?.() ?? c.userId
+    }))
+  }
   return out
 }
 
@@ -70,7 +80,9 @@ const exportedMethods = {
     return feedPlans.map((p) => ({
       ...serializePlan(p),
       authorName: nameById.get(p.userId.toString()) || 'A friend',
-      activityCount: Array.isArray(p.activities) ? p.activities.length : 0
+      activityCount: Array.isArray(p.activities) ? p.activities.length : 0,
+      reactionCount: Array.isArray(p.reactions) ? p.reactions.length : 0,
+      commentCount: Array.isArray(p.comments) ? p.comments.length : 0
     }))
   },
 
@@ -115,6 +127,92 @@ const exportedMethods = {
 
     const inserted = await planCollection.insertOne(copy)
     return await this.getPlanById(inserted.insertedId.toString())
+  },
+
+  // Helper: a plan is interactive (reactable/commentable) if the actor owns it
+  // or it's public. Private plans stay locked to their owner.
+  async _findVisiblePlan(planId, userId) {
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+    if (plan.userId.toString() !== userId && !plan.isPublic)
+      throw { status: 403, message: 'This plan is private' }
+    return plan
+  },
+
+  async toggleReaction(planId, userId) {
+    // Toggle a 👍 on a plan. One round-trip to remove; if nothing was removed,
+    // the reaction wasn't there, so add it — same idempotent pattern as favorites.
+    planId = checkId(planId)
+    userId = checkId(userId)
+    await this._findVisiblePlan(planId, userId)
+
+    const planCollection = await plans()
+    const userOid = new ObjectId(userId)
+
+    const pull = await planCollection.updateOne(
+      { _id: new ObjectId(planId), reactions: userOid },
+      { $pull: { reactions: userOid } }
+    )
+    if (pull.modifiedCount === 1) return { reacted: false }
+
+    await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $addToSet: { reactions: userOid } }
+    )
+    return { reacted: true }
+  },
+
+  async addComment(planId, userId, authorName, text) {
+    planId = checkId(planId)
+    userId = checkId(userId)
+    text = checkString(text)
+    if (text.length > 1000) throw { status: 400, message: 'Comment cannot be longer than 1000 characters' }
+    await this._findVisiblePlan(planId, userId)
+
+    const comment = {
+      _id: new ObjectId(),
+      userId: new ObjectId(userId),
+      authorName: typeof authorName === 'string' && authorName.trim() ? authorName.trim() : 'A friend',
+      text,
+      createdAt: new Date()
+    }
+
+    const planCollection = await plans()
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $push: { comments: comment }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 500, message: 'Could not add comment' }
+    return await this.getPlanById(planId)
+  },
+
+  async deletePlanComment(planId, commentId, requester) {
+    // Author, plan owner, or an admin may remove a comment.
+    planId = checkId(planId)
+    commentId = checkId(commentId)
+    if (!requester || requester._id === undefined) throw { status: 400, message: 'Must have a requester' }
+    const requesterId = checkId(requester._id)
+    const isAdmin = requester.role === 'admin'
+
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+
+    const comment = (plan.comments || []).find((c) => c._id.toString() === commentId)
+    if (!comment) throw { status: 404, message: 'Comment not found' }
+
+    const isAuthor = comment.userId.toString() === requesterId
+    const isPlanOwner = plan.userId.toString() === requesterId
+    if (!isAuthor && !isPlanOwner && !isAdmin)
+      throw { status: 403, message: 'You cannot delete this comment' }
+
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $pull: { comments: { _id: new ObjectId(commentId) } }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 500, message: 'Could not delete comment' }
+    return await this.getPlanById(planId)
   },
 
   async getPlanById(planId) {

@@ -83,4 +83,32 @@
 {{else}}
 <p>No activities yet</p>
 {{/if}}
+
+<section class="plan-social">
+  <form method="POST" action="/plans/{{plan._id}}/react">
+    <button type="submit">{{#if hasReacted}}&#128077; Liked{{else}}&#128077; Like{{/if}}</button>
+  </form>
+  <p class="muted">{{reactionCount}} like{{#unless (eq reactionCount 1)}}s{{/unless}}</p>
+
+  <h2>Comments</h2>
+  <form method="POST" action="/plans/{{plan._id}}/comments">
+    <input type="text" name="text" placeholder="Add a comment" maxlength="1000" required />
+    <button type="submit">Post</button>
+  </form>
+
+  {{#if comments.length}}
+  {{#each comments}}
+  <div class="plan-comment">
+    <p><strong>{{this.authorName}}</strong>: {{this.text}}</p>
+    {{#if this.canDelete}}
+    <form method="POST" action="/plans/{{../plan._id}}/comments/{{this._id}}">
+      <button type="submit">Delete</button>
+    </form>
+    {{/if}}
+  </div>
+  {{/each}}
+  {{else}}
+  <p>No comments yet.</p>
+  {{/if}}
+</section>
 {{/if}}
