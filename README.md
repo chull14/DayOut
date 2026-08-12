@@ -1,4 +1,4 @@
-# DayOut NYC
+# DayOut NYC - Version 1.1
 
 A web app for planning NYC day trips. Browse real NYC locations (museums, parks, restaurants, cafes) seeded from NYC Open Data, build dated plans with time-slotted activities, leave reviews and comments, favorite places, and submit new locations for admin approval. Admins moderate reviews, comments, and pending locations from a single dashboard.
 
