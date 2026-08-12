@@ -29,6 +29,12 @@ function serializePlan(plan) {
       userId: c.userId?.toString?.() ?? c.userId
     }))
   }
+  if (Array.isArray(plan.attendees)) {
+    out.attendees = plan.attendees.map((a) => ({
+      ...a,
+      userId: a.userId?.toString?.() ?? a.userId
+    }))
+  }
   return out
 }
 
@@ -140,15 +146,191 @@ const exportedMethods = {
     return await this.getPlanById(inserted.insertedId.toString())
   },
 
-  // Helper: a plan is interactive (reactable/commentable) if the actor owns it
-  // or it's public. Private plans stay locked to their owner.
+  // Helper: a user can see (and interact with) a plan if they own it, it's
+  // public, or they've been invited to it. Private, uninvited plans stay locked.
   async _findVisiblePlan(planId, userId) {
     const planCollection = await plans()
     const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
     if (!plan) throw { status: 404, message: 'Plan not found' }
-    if (plan.userId.toString() !== userId && !plan.isPublic)
+    const isOwner = plan.userId.toString() === userId
+    const isInvited = (plan.attendees || []).some((a) => a.userId.toString() === userId)
+    if (!isOwner && !plan.isPublic && !isInvited)
       throw { status: 403, message: 'This plan is private' }
     return plan
+  },
+
+  async inviteToPlan(planId, ownerId, friendId) {
+    // Owner invites one of their friends onto the plan as a pending attendee.
+    planId = checkId(planId)
+    ownerId = checkId(ownerId)
+    friendId = checkId(friendId)
+    if (ownerId === friendId) throw { status: 400, message: 'You cannot invite yourself' }
+
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+    if (plan.userId.toString() !== ownerId)
+      throw { status: 403, message: 'Only the plan owner can invite people' }
+
+    const userCollection = await users()
+    const owner = await userCollection.findOne(
+      { _id: new ObjectId(ownerId) },
+      { projection: { friends: 1 } }
+    )
+    const isFriend = (owner?.friends || []).some((f) => f.toString() === friendId)
+    if (!isFriend) throw { status: 400, message: 'You can only invite friends' }
+
+    if ((plan.attendees || []).some((a) => a.userId.toString() === friendId))
+      throw { status: 400, message: 'That friend is already on this plan' }
+
+    const attendee = {
+      userId: new ObjectId(friendId),
+      status: 'invited',
+      invitedAt: new Date(),
+      respondedAt: null
+    }
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $push: { attendees: attendee }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 500, message: 'Could not send invite' }
+    return await this.getPlanById(planId)
+  },
+
+  async respondToInvite(planId, userId, status) {
+    // An invited user sets their RSVP. Must already be an attendee on the plan.
+    planId = checkId(planId)
+    userId = checkId(userId)
+    const allowed = ['going', 'interested', 'not_going']
+    if (!allowed.includes(status)) throw { status: 400, message: 'Invalid RSVP status' }
+
+    const planCollection = await plans()
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId), 'attendees.userId': new ObjectId(userId) },
+      {
+        $set: {
+          'attendees.$.status': status,
+          'attendees.$.respondedAt': new Date(),
+          updatedAt: new Date()
+        }
+      }
+    )
+    if (result.matchedCount === 0)
+      throw { status: 403, message: 'You were not invited to this plan' }
+    return await this.getPlanById(planId)
+  },
+
+  async removeAttendee(planId, requesterId, attendeeId) {
+    // The plan owner may uninvite anyone; an attendee may remove themselves.
+    planId = checkId(planId)
+    requesterId = checkId(requesterId)
+    attendeeId = checkId(attendeeId)
+
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+
+    const isOwner = plan.userId.toString() === requesterId
+    const isSelf = requesterId === attendeeId
+    if (!isOwner && !isSelf) throw { status: 403, message: 'Not allowed' }
+
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $pull: { attendees: { userId: new ObjectId(attendeeId) } }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 404, message: 'Attendee not found' }
+    return await this.getPlanById(planId)
+  },
+
+  async getPlanAttendees(planId) {
+    // Resolve every attendee's display name + status for the "who's in?" panel.
+    planId = checkId(planId)
+    const planCollection = await plans()
+    const plan = await planCollection.findOne(
+      { _id: new ObjectId(planId) },
+      { projection: { attendees: 1 } }
+    )
+    const attendees = plan?.attendees || []
+    if (attendees.length === 0) return []
+
+    const userCollection = await users()
+    const ids = attendees.map((a) => a.userId)
+    const people = await userCollection
+      .find({ _id: { $in: ids } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      people.map((p) => [p._id.toString(), `${p.firstName} ${p.lastName}`.trim()])
+    )
+
+    return attendees.map((a) => ({
+      userId: a.userId.toString(),
+      name: nameById.get(a.userId.toString()) || 'A friend',
+      status: a.status
+    }))
+  },
+
+  async getPlansUserIsAttending(userId) {
+    // Plans this user has RSVP'd to (going/interested) but doesn't own — their
+    // persistent home for accepted invites. The plan stays a single shared doc.
+    userId = checkId(userId)
+    const planCollection = await plans()
+    const list = await planCollection
+      .find({
+        userId: { $ne: new ObjectId(userId) },
+        attendees: {
+          $elemMatch: { userId: new ObjectId(userId), status: { $in: ['going', 'interested'] } }
+        }
+      })
+      .sort({ date: 1 })
+      .toArray()
+    if (list.length === 0) return []
+
+    const userCollection = await users()
+    const ownerIds = [...new Set(list.map((p) => p.userId.toString()))].map((id) => new ObjectId(id))
+    const owners = await userCollection
+      .find({ _id: { $in: ownerIds } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      owners.map((o) => [o._id.toString(), `${o.firstName} ${o.lastName}`.trim()])
+    )
+
+    return list.map((p) => {
+      const me = (p.attendees || []).find((a) => a.userId.toString() === userId)
+      return {
+        _id: p._id.toString(),
+        title: p.title,
+        date: p.date,
+        ownerName: nameById.get(p.userId.toString()) || 'A friend',
+        myStatus: me ? me.status : null
+      }
+    })
+  },
+
+  async getPlanInvitations(userId) {
+    // Plans this user has been invited to but not yet responded to.
+    userId = checkId(userId)
+    const planCollection = await plans()
+    const list = await planCollection
+      .find({ attendees: { $elemMatch: { userId: new ObjectId(userId), status: 'invited' } } })
+      .sort({ date: 1 })
+      .toArray()
+    if (list.length === 0) return []
+
+    const userCollection = await users()
+    const ownerIds = [...new Set(list.map((p) => p.userId.toString()))].map((id) => new ObjectId(id))
+    const owners = await userCollection
+      .find({ _id: { $in: ownerIds } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      owners.map((o) => [o._id.toString(), `${o.firstName} ${o.lastName}`.trim()])
+    )
+
+    return list.map((p) => ({
+      _id: p._id.toString(),
+      title: p.title,
+      date: p.date,
+      ownerName: nameById.get(p.userId.toString()) || 'A friend'
+    }))
   },
 
   async toggleReaction(planId, userId) {

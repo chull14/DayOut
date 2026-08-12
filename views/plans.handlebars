@@ -6,6 +6,18 @@
 {{/each}}
 {{/if}}
 
+{{#if attending.length}}
+<section class="attending">
+  <h2>Plans you're attending</h2>
+  {{#each attending}}
+  <div class="attending-plan">
+    <a href="/plans/{{this._id}}">{{this.title}}</a>
+    <span class="muted">by {{this.ownerName}}{{#if this.date}} &middot; {{this.date}}{{/if}} &middot; you're {{this.myStatus}}</span>
+  </div>
+  {{/each}}
+</section>
+{{/if}}
+
 {{#if plan}}
 <p>{{plan.title}} - {{plan.date}}</p>
 
@@ -83,6 +95,67 @@
 {{else}}
 <p>No activities yet</p>
 {{/if}}
+
+<section class="plan-attendees">
+  <h2>Who's in?</h2>
+
+  {{#if going.length}}
+  <p><strong>Going:</strong>
+    {{#each going}}<a href="/profile/{{this.userId}}">{{this.name}}</a>{{#unless @last}}, {{/unless}}{{/each}}
+  </p>
+  {{/if}}
+  {{#if interested.length}}
+  <p><strong>Interested:</strong>
+    {{#each interested}}<a href="/profile/{{this.userId}}">{{this.name}}</a>{{#unless @last}}, {{/unless}}{{/each}}
+  </p>
+  {{/if}}
+  {{#if invitedPending.length}}
+  <p><strong>Invited (no reply yet):</strong>
+    {{#each invitedPending}}{{this.name}}{{#unless @last}}, {{/unless}}{{/each}}
+  </p>
+  {{/if}}
+  {{#unless going.length}}{{#unless interested.length}}{{#unless invitedPending.length}}
+  <p>No one invited yet.</p>
+  {{/unless}}{{/unless}}{{/unless}}
+
+  {{#if isInvited}}
+  <div class="rsvp-controls">
+    <p>Your RSVP: {{#if myRsvp}}{{myRsvp}}{{else}}no reply{{/if}}</p>
+    <form method="POST" action="/plans/{{plan._id}}/rsvp">
+      <button type="submit" name="status" value="going">I'm going</button>
+      <button type="submit" name="status" value="interested">Interested</button>
+      <button type="submit" name="status" value="not_going">Can't go</button>
+    </form>
+  </div>
+  {{/if}}
+
+  {{#if isOwner}}
+  <div class="invite-controls">
+    <h3>Invite a friend</h3>
+    {{#if invitableFriends.length}}
+    <form method="POST" action="/plans/{{plan._id}}/invite">
+      <select name="friendId" required>
+        {{#each invitableFriends}}
+        <option value="{{this._id}}">{{this.name}}</option>
+        {{/each}}
+      </select>
+      <button type="submit">Invite</button>
+    </form>
+    {{else}}
+    <p class="muted">No more friends to invite.</p>
+    {{/if}}
+
+    {{#if invitedPending.length}}
+    <h4>Uninvite</h4>
+    {{#each invitedPending}}
+    <form method="POST" action="/plans/{{../plan._id}}/attendees/{{this.userId}}">
+      <button type="submit">Remove {{this.name}}</button>
+    </form>
+    {{/each}}
+    {{/if}}
+  </div>
+  {{/if}}
+</section>
 
 <section class="plan-social">
   <form method="POST" action="/plans/{{plan._id}}/react">

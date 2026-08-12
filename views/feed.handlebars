@@ -1,6 +1,31 @@
 <h1>Friends' Plans</h1>
 <p class="muted">Public day-outs your friends have shared. Copy one to make it your own.</p>
 
+{{#if invitations.length}}
+<section class="invitations">
+  <h2>You're invited</h2>
+  {{#each invitations}}
+  <div class="invitation">
+    <a href="/plans/{{this._id}}">{{this.title}}</a>
+    <span class="muted">by {{this.ownerName}}{{#if this.date}} &middot; {{this.date}}{{/if}}</span>
+    &mdash; <a href="/plans/{{this._id}}">RSVP</a>
+  </div>
+  {{/each}}
+</section>
+{{/if}}
+
+{{#if attending.length}}
+<section class="attending">
+  <h2>Plans you're attending</h2>
+  {{#each attending}}
+  <div class="attending-plan">
+    <a href="/plans/{{this._id}}">{{this.title}}</a>
+    <span class="muted">by {{this.ownerName}}{{#if this.date}} &middot; {{this.date}}{{/if}} &middot; you're {{this.myStatus}}</span>
+  </div>
+  {{/each}}
+</section>
+{{/if}}
+
 {{#if feedPlans.length}}
 {{#each feedPlans}}
 <div class="feed-plan">
