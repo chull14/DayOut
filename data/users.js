@@ -31,6 +31,7 @@ export async function createUser(firstName, lastName, email, password) {
         role: 'user',
         favoriteLocations: [],
         friends: [],
+        pendingRequests: [],
         createdAt: new Date()
     };
     

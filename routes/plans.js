@@ -336,23 +336,10 @@ router.route('/:planId/activities')
       res.status(e.status || 500).render('error', { error: e.message || e })
     }
   })
-  .post(async (req, res) => { // DONE
-    // add an activity to a plan
-    try {
-      const userId = checkId(req.session.user._id)
-      const planId = checkId(req.params.planId)
-      const { locationId, startTime, endTime, notes } = req.body
-
-      const plan = await planData.getPlanById(planId)
-      if (plan.userId.toString() !== userId)
-        return res.status(403).render('error', { error: 'Unauthorized' })
-
-      await planData.addActivity(planId, locationId, startTime, endTime, notes)
-      res.redirect(`/plans/${planId}`)
-    } catch (e) {
-      res.status(e.status || 500).render('error', { error: e.message || e })
-    }
-  })
+// Note: adding an activity is handled by POST /plans/activities (which passes
+// locationName through to planData.addActivity). The old POST /:planId/activities
+// handler was unused and called addActivity with a shifted argument list, so it
+// has been removed to avoid a second, broken code path.
 
 router.route('/:planId/activities/:activityId')
   .put(async (req, res) => { // DONE
