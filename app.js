@@ -1,6 +1,5 @@
 import express from 'express';
 import session from 'express-session';
-import cookieParser from 'cookie-parser';
 import { engine } from 'express-handlebars';
 import configRoutes from './routes/index.js';
 import methodOverride from 'method-override'
@@ -25,55 +24,30 @@ app.set('view engine', 'handlebars');
 app.set('views', './views');
 
 // middleware
-app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 app.use(methodOverride('_method'))
 
 // session
+// Secret comes from SESSION_SECRET when set (production); the fallback keeps
+// local dev working out of the box. Cookie is httpOnly + sameSite 'lax' so it
+// isn't readable from JS and isn't sent on cross-site requests.
 app.use(session({
   name: 'DayOutNYC',
-  secret: "This is a secret.. shhh don't tell anyone",
+  secret: process.env.SESSION_SECRET || 'dayout-dev-secret-change-me',
   saveUninitialized: false,
   resave: false,
-  cookie: { maxAge: 60000 * 60 * 24 }
+  cookie: {
+    maxAge: 60000 * 60 * 24,
+    httpOnly: true,
+    sameSite: 'lax'
+  }
 }));
 
 // makes session user available in every handlebars template
 app.use((req, res, next) => {
   res.locals.user = req.session.user;
-  next();
-});
-
-let totalRequests = 0;
-app.use((req, res, next) => {
-  totalRequests++;
-
-  // console.log('The request has all the following cookies:');
-  // console.log(req.cookies);
-
-  //if (!req.cookies.lastAccessed) {
-    //console.log('This user has never accessed the site before');
-  //}
-
-  if (totalRequests % 5 === 0) {
-    const anHourAgo = new Date();
-    anHourAgo.setHours(anHourAgo.getHours() - 1);
-    res.cookie('lastAccessed', '', { expires: anHourAgo, httpOnly: true });
-    res.clearCookie('lastAccessed');
-    return next();
-  }
-
-  const now = new Date();
-  const expiresAt = new Date();
-  expiresAt.setHours(expiresAt.getHours() + 1);
-  res.cookie('lastAccessed', now.toString(), {
-    expires: expiresAt,
-    httpOnly: true,
-    sameSite: 'lax'
-  });
-
   next();
 });
 

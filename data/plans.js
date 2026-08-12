@@ -2,6 +2,26 @@ import { plans } from '../config/mongoCollections.js'
 import { ObjectId } from 'mongodb'
 import { checkId, checkDate, checkString, checkTime } from '../helpers.js'
 
+// Convert a plan's ObjectId fields (its own _id/userId and each activity's
+// _id/locationId) to strings so callers/templates get plain data, matching how
+// the other data modules serialize before returning.
+function serializePlan(plan) {
+  if (!plan) return plan
+  const out = {
+    ...plan,
+    _id: plan._id?.toString?.() ?? plan._id,
+    userId: plan.userId?.toString?.() ?? plan.userId
+  }
+  if (Array.isArray(plan.activities)) {
+    out.activities = plan.activities.map((a) => ({
+      ...a,
+      _id: a._id?.toString?.() ?? a._id,
+      locationId: a.locationId?.toString?.() ?? a.locationId
+    }))
+  }
+  return out
+}
+
 // What kind of querying:
 // - empty query (handled on frontend?)
 // - retrieve all of user's plans
@@ -14,7 +34,8 @@ const exportedMethods = {
     // GET
     userId = checkId(userId)
     const planCollection = await plans()
-    return await planCollection.find({ userId: new ObjectId(userId) }).toArray()
+    const all = await planCollection.find({ userId: new ObjectId(userId) }).toArray()
+    return all.map(serializePlan)
   },
 
   async getPlanById(planId) {

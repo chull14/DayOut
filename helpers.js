@@ -22,9 +22,12 @@ export function checkName(value) {
     throw 'Must be between 2 and 20 characters';
   }
 
-  const nameRegex = /^[a-zA-Z ]+$/;
+  // Allow letters (including accented), plus spaces, hyphens and apostrophes,
+  // so real names like O'Brien, Anne-Marie and José validate. Must start with
+  // a letter to reject inputs that are only punctuation.
+  const nameRegex = /^\p{L}[\p{L} '-]*$/u;
   if (!nameRegex.test(value)) {
-    throw 'Must contain only letters';
+    throw 'Must contain only letters, spaces, hyphens, and apostrophes';
   }
 
   return value;

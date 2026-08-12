@@ -41,11 +41,14 @@ function validateSignupInput(firstName, lastName, email, password, confirmPasswo
   if (lastName.trim().length < 2 || lastName.trim().length > 20) {
     throw 'Last name must be between 2 and 20 characters';
   }
-  if (!/^[a-zA-Z ]+$/.test(firstName.trim())) {
-    throw 'First name must contain only letters';
+  // Letters (incl. accented), spaces, hyphens and apostrophes; must start with
+  // a letter. Kept in sync with checkName() in helpers.js.
+  const nameRegex = /^\p{L}[\p{L} '-]*$/u;
+  if (!nameRegex.test(firstName.trim())) {
+    throw 'First name must contain only letters, spaces, hyphens, and apostrophes';
   }
-  if (!/^[a-zA-Z ]+$/.test(lastName.trim())) {
-    throw 'Last name must contain only letters';
+  if (!nameRegex.test(lastName.trim())) {
+    throw 'Last name must contain only letters, spaces, hyphens, and apostrophes';
   }
 
   if (password.length < 8) throw 'Password must be at least 8 characters';
