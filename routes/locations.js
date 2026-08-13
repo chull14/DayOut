@@ -9,9 +9,9 @@ import {
   rejectLocation,
   toggleFavoriteLocation,
   isFavoritedByUser,
-  getRecommendationsForUser,
   ALLOWED_TYPES
 } from '../data/locations.js';
+import { getStoredOrCompute } from '../data/recommendations.js';
 import { getReviewsForLocation } from '../data/reviews.js';
 import { getCommentsForLocation } from '../data/comments.js';
 import { requireLogin, requireAdmin } from '../middleware/auth.js';
@@ -106,7 +106,10 @@ router.get('/', async function (req, res) {
     let recommendations = null;
     if (req.session.user) {
       try {
-        recommendations = await getRecommendationsForUser(req.session.user._id, 8);
+        // Reads the user's STORED recommendations (no AI call on page load).
+        // Computes synchronously only on first-ever load; refreshes in the
+        // background when stale. Each pick already carries its "why" line.
+        recommendations = await getStoredOrCompute(req.session.user._id);
       } catch (recErr) {
         console.error('recommendations failed:', recErr);
       }

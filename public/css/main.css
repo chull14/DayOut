@@ -284,6 +284,13 @@ button {
   font-size: 0.9em;
 }
 
+.location-card-why {
+  margin: 0.4rem 0 0 0;
+  font-size: 0.82em;
+  color: dimgray;
+  line-height: 1.3;
+}
+
 /* location detail page */
 .location-detail-header {
   border-bottom: 1px solid lightgray;
