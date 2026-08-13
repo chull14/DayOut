@@ -37,7 +37,7 @@
 {{#if friendsList}}
 {{#each friendsList}}
 <div>
-  <p>{{this.firstName}} {{this.lastName}}</p>
+  <p><a href="/profile/{{this._id}}">{{this.firstName}} {{this.lastName}}</a></p>
   {{#if this.recentPlan}}
   <p>Latest plan: <a href="/plans/{{this.recentPlan._id}}">{{this.recentPlan.title}}</a> - {{this.recentPlan.date}}</p>
   {{else}}

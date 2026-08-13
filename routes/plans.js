@@ -4,11 +4,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import planData from '../data/plans.js'
+import friendData from '../data/friends.js';
 import { getLocationById } from '../data/locations.js';
 import { locations } from '../config/mongoCollections.js';
 import distance from '@turf/distance';
 import { checkId } from '../helpers.js';
 import { requireLogin } from '../middleware/auth.js';
+import xss from 'xss';
 
 // Every plans route needs an authenticated user.
 router.use(requireLogin);
@@ -196,8 +198,111 @@ router.get('/all', async (req, res) => { // DONE
   try {
     const userId = checkId(req.session.user._id)
     const plans = await planData.getAllPlans(userId)
+    const attending = await planData.getPlansUserIsAttending(userId)
 
-    res.render('plans', { title: 'My Plans', plans })
+    res.render('plans', { title: 'My Plans', plans, attending })
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.get('/feed', async (req, res) => {
+  // Social feed: friends' public plans. Declared before '/:planId' so the
+  // literal '/feed' path isn't captured as a planId.
+  try {
+    const userId = checkId(req.session.user._id)
+    const feedPlans = await planData.getFriendsPublicPlans(userId)
+    const invitations = await planData.getPlanInvitations(userId)
+    const attending = await planData.getPlansUserIsAttending(userId)
+    res.render('feed', { title: "Friends' Plans", feedPlans, invitations, attending })
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/clone', async (req, res) => {
+  // Copy a friend's public plan (or one of your own) into your plans.
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    const clone = await planData.clonePlan(planId, userId)
+    res.redirect(`/plans/${clone._id}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/react', async (req, res) => {
+  // Toggle a 👍 on a plan you can see (your own or a public one).
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    await planData.toggleReaction(planId, userId)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/invite', async (req, res) => {
+  // Owner invites a friend onto the plan.
+  try {
+    const ownerId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    const friendId = checkId(req.body?.friendId || '')
+    await planData.inviteToPlan(planId, ownerId, friendId)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/rsvp', async (req, res) => {
+  // Invited user sets their RSVP (going / interested / not_going).
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    await planData.respondToInvite(planId, userId, req.body?.status)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/attendees/:attendeeId', async (req, res) => {
+  // Owner uninvites someone, or an attendee removes themselves.
+  try {
+    const requesterId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    const attendeeId = checkId(req.params.attendeeId)
+    await planData.removeAttendee(planId, requesterId, attendeeId)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/comments', async (req, res) => {
+  // Add a comment to a plan you can see.
+  try {
+    const userId = checkId(req.session.user._id)
+    const planId = checkId(req.params.planId)
+    const authorName = `${req.session.user.firstName || ''} ${req.session.user.lastName || ''}`.trim()
+    const text = xss(req.body?.text || '')
+    await planData.addComment(planId, userId, authorName, text)
+    res.redirect(`/plans/${planId}`)
+  } catch (e) {
+    res.status(e.status || 500).render('error', { error: e.message || e })
+  }
+})
+
+router.post('/:planId/comments/:commentId', async (req, res) => {
+  // Delete a comment (author, plan owner, or admin).
+  try {
+    const planId = checkId(req.params.planId)
+    const commentId = checkId(req.params.commentId)
+    await planData.deletePlanComment(planId, commentId, req.session.user)
+    res.redirect(`/plans/${planId}`)
   } catch (e) {
     res.status(e.status || 500).render('error', { error: e.message || e })
   }
@@ -256,7 +361,8 @@ router.route('/:planId') // plan specific page
 
       const plan = await planData.getPlanById(planId)
 
-      if (plan.userId.toString() !== userId && !plan.isPublic)
+      const isInvited = (plan.attendees || []).some((a) => a.userId.toString() === userId)
+      if (plan.userId.toString() !== userId && !plan.isPublic && !isInvited)
         return res.status(403).render('error', { error: 'Unauthorized' })
 
       plan.activities.sort((a, b) => {
@@ -271,14 +377,61 @@ router.route('/:planId') // plan specific page
       })
 
       const isOwner = plan.userId.toString() === userId
+      const isAdmin = req.session.user.role === 'admin'
       const travel = await computeTravelEstimates(plan.activities || []);
+
+      // Reactions + comments view data (comments newest first).
+      const reactions = plan.reactions || []
+      const reactionCount = reactions.length
+      const hasReacted = reactions.some((r) => r.toString() === userId)
+      const comments = (plan.comments || [])
+        .slice()
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map((c) => ({
+          _id: c._id.toString(),
+          authorName: c.authorName,
+          text: c.text,
+          createdAt: c.createdAt,
+          canDelete: c.userId.toString() === userId || isOwner || isAdmin
+        }))
+
+      // "Who's in?" — attendees grouped by RSVP status. Only the owner sees the
+      // invite controls, and only invitees see the RSVP buttons.
+      const attendees = await planData.getPlanAttendees(planId)
+      const going = attendees.filter((a) => a.status === 'going')
+      const interested = attendees.filter((a) => a.status === 'interested')
+      const invitedPending = attendees.filter((a) => a.status === 'invited')
+      const notGoing = attendees.filter((a) => a.status === 'not_going')
+      const myAttendee = attendees.find((a) => a.userId === userId)
+      const myRsvp = myAttendee ? myAttendee.status : null
+
+      // Friends the owner can still invite (not already on the plan).
+      let invitableFriends = []
+      if (isOwner) {
+        const friends = await friendData.getFriends(userId)
+        const onPlan = new Set(attendees.map((a) => a.userId))
+        invitableFriends = friends
+          .filter((f) => !onPlan.has(f._id.toString()))
+          .map((f) => ({ _id: f._id.toString(), name: `${f.firstName} ${f.lastName}`.trim() }))
+      }
+
       res.render('plans', {
         title: 'Current Plan',
         plan,
         isOwner,
         travelLegs: travel.travelLegs,
         totalTravelMinutes: travel.totalTravelMinutes,
-        unknownLegCount: travel.unknownLegCount
+        unknownLegCount: travel.unknownLegCount,
+        reactionCount,
+        hasReacted,
+        comments,
+        going,
+        interested,
+        invitedPending,
+        notGoing,
+        isInvited,
+        myRsvp,
+        invitableFriends
       })
     } catch (e) {
       res.status(e.status || 500).render('error', { error: e.message || e })

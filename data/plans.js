@@ -1,4 +1,4 @@
-import { plans } from '../config/mongoCollections.js'
+import { plans, users } from '../config/mongoCollections.js'
 import { ObjectId } from 'mongodb'
 import { checkId, checkDate, checkString, checkTime } from '../helpers.js'
 
@@ -19,6 +19,22 @@ function serializePlan(plan) {
       locationId: a.locationId?.toString?.() ?? a.locationId
     }))
   }
+  if (Array.isArray(plan.reactions)) {
+    out.reactions = plan.reactions.map((r) => r?.toString?.() ?? r)
+  }
+  if (Array.isArray(plan.comments)) {
+    out.comments = plan.comments.map((c) => ({
+      ...c,
+      _id: c._id?.toString?.() ?? c._id,
+      userId: c.userId?.toString?.() ?? c.userId
+    }))
+  }
+  if (Array.isArray(plan.attendees)) {
+    out.attendees = plan.attendees.map((a) => ({
+      ...a,
+      userId: a.userId?.toString?.() ?? a.userId
+    }))
+  }
   return out
 }
 
@@ -36,6 +52,360 @@ const exportedMethods = {
     const planCollection = await plans()
     const all = await planCollection.find({ userId: new ObjectId(userId) }).toArray()
     return all.map(serializePlan)
+  },
+
+  async getFriendsPublicPlans(userId) {
+    // GET — the social feed: every public plan authored by one of my friends,
+    // newest first, tagged with the author's display name + a stop count.
+    userId = checkId(userId)
+    const userCollection = await users()
+    const me = await userCollection.findOne(
+      { _id: new ObjectId(userId) },
+      { projection: { friends: 1 } }
+    )
+    const friendIds = me?.friends || []
+    if (friendIds.length === 0) return []
+
+    const planCollection = await plans()
+    const feedPlans = await planCollection
+      .find({ userId: { $in: friendIds }, isPublic: true })
+      .sort({ createdAt: -1 })
+      .toArray()
+    if (feedPlans.length === 0) return []
+
+    // One round-trip to resolve author names for every plan in the feed.
+    const authorIds = [...new Set(feedPlans.map((p) => p.userId.toString()))]
+      .map((id) => new ObjectId(id))
+    const authors = await userCollection
+      .find({ _id: { $in: authorIds } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      authors.map((a) => [a._id.toString(), `${a.firstName} ${a.lastName}`.trim()])
+    )
+
+    return feedPlans.map((p) => ({
+      ...serializePlan(p),
+      authorName: nameById.get(p.userId.toString()) || 'A friend',
+      activityCount: Array.isArray(p.activities) ? p.activities.length : 0,
+      reactionCount: Array.isArray(p.reactions) ? p.reactions.length : 0,
+      commentCount: Array.isArray(p.comments) ? p.comments.length : 0
+    }))
+  },
+
+  async getPublicPlansByUser(userId) {
+    // GET — a single user's public plans, newest first. Powers public profiles.
+    userId = checkId(userId)
+    const planCollection = await plans()
+    const list = await planCollection
+      .find({ userId: new ObjectId(userId), isPublic: true })
+      .sort({ createdAt: -1 })
+      .toArray()
+    return list.map(serializePlan)
+  },
+
+  async clonePlan(planId, newOwnerId) {
+    // POST — copy a plan into the requester's own plans. Clones start private
+    // and active so the new owner can edit before re-sharing. You may clone
+    // your own plan or any public one; private plans you don't own are off-limits.
+    planId = checkId(planId)
+    newOwnerId = checkId(newOwnerId)
+
+    const planCollection = await plans()
+    const source = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!source) throw { status: 404, message: 'Plan not found' }
+
+    if (source.userId.toString() !== newOwnerId && !source.isPublic)
+      throw { status: 403, message: 'This plan is private' }
+
+    const clonedActivities = Array.isArray(source.activities)
+      ? source.activities.map((a) => ({
+          _id: new ObjectId(),
+          locationId: a.locationId ? new ObjectId(a.locationId) : a.locationId,
+          locationName: a.locationName,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          notes: a.notes ?? ''
+        }))
+      : []
+
+    const now = new Date()
+    const copy = {
+      userId: new ObjectId(newOwnerId),
+      title: `Copy of ${source.title}`,
+      date: source.date,
+      status: 'active',
+      isPublic: false,
+      activities: clonedActivities,
+      photos: [],
+      clonedFrom: new ObjectId(planId),
+      createdAt: now,
+      updatedAt: now
+    }
+
+    const inserted = await planCollection.insertOne(copy)
+    return await this.getPlanById(inserted.insertedId.toString())
+  },
+
+  // Helper: a user can see (and interact with) a plan if they own it, it's
+  // public, or they've been invited to it. Private, uninvited plans stay locked.
+  async _findVisiblePlan(planId, userId) {
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+    const isOwner = plan.userId.toString() === userId
+    const isInvited = (plan.attendees || []).some((a) => a.userId.toString() === userId)
+    if (!isOwner && !plan.isPublic && !isInvited)
+      throw { status: 403, message: 'This plan is private' }
+    return plan
+  },
+
+  async inviteToPlan(planId, ownerId, friendId) {
+    // Owner invites one of their friends onto the plan as a pending attendee.
+    planId = checkId(planId)
+    ownerId = checkId(ownerId)
+    friendId = checkId(friendId)
+    if (ownerId === friendId) throw { status: 400, message: 'You cannot invite yourself' }
+
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+    if (plan.userId.toString() !== ownerId)
+      throw { status: 403, message: 'Only the plan owner can invite people' }
+
+    const userCollection = await users()
+    const owner = await userCollection.findOne(
+      { _id: new ObjectId(ownerId) },
+      { projection: { friends: 1 } }
+    )
+    const isFriend = (owner?.friends || []).some((f) => f.toString() === friendId)
+    if (!isFriend) throw { status: 400, message: 'You can only invite friends' }
+
+    if ((plan.attendees || []).some((a) => a.userId.toString() === friendId))
+      throw { status: 400, message: 'That friend is already on this plan' }
+
+    const attendee = {
+      userId: new ObjectId(friendId),
+      status: 'invited',
+      invitedAt: new Date(),
+      respondedAt: null
+    }
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $push: { attendees: attendee }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 500, message: 'Could not send invite' }
+    return await this.getPlanById(planId)
+  },
+
+  async respondToInvite(planId, userId, status) {
+    // An invited user sets their RSVP. Must already be an attendee on the plan.
+    planId = checkId(planId)
+    userId = checkId(userId)
+    const allowed = ['going', 'interested', 'not_going']
+    if (!allowed.includes(status)) throw { status: 400, message: 'Invalid RSVP status' }
+
+    const planCollection = await plans()
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId), 'attendees.userId': new ObjectId(userId) },
+      {
+        $set: {
+          'attendees.$.status': status,
+          'attendees.$.respondedAt': new Date(),
+          updatedAt: new Date()
+        }
+      }
+    )
+    if (result.matchedCount === 0)
+      throw { status: 403, message: 'You were not invited to this plan' }
+    return await this.getPlanById(planId)
+  },
+
+  async removeAttendee(planId, requesterId, attendeeId) {
+    // The plan owner may uninvite anyone; an attendee may remove themselves.
+    planId = checkId(planId)
+    requesterId = checkId(requesterId)
+    attendeeId = checkId(attendeeId)
+
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+
+    const isOwner = plan.userId.toString() === requesterId
+    const isSelf = requesterId === attendeeId
+    if (!isOwner && !isSelf) throw { status: 403, message: 'Not allowed' }
+
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $pull: { attendees: { userId: new ObjectId(attendeeId) } }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 404, message: 'Attendee not found' }
+    return await this.getPlanById(planId)
+  },
+
+  async getPlanAttendees(planId) {
+    // Resolve every attendee's display name + status for the "who's in?" panel.
+    planId = checkId(planId)
+    const planCollection = await plans()
+    const plan = await planCollection.findOne(
+      { _id: new ObjectId(planId) },
+      { projection: { attendees: 1 } }
+    )
+    const attendees = plan?.attendees || []
+    if (attendees.length === 0) return []
+
+    const userCollection = await users()
+    const ids = attendees.map((a) => a.userId)
+    const people = await userCollection
+      .find({ _id: { $in: ids } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      people.map((p) => [p._id.toString(), `${p.firstName} ${p.lastName}`.trim()])
+    )
+
+    return attendees.map((a) => ({
+      userId: a.userId.toString(),
+      name: nameById.get(a.userId.toString()) || 'A friend',
+      status: a.status
+    }))
+  },
+
+  async getPlansUserIsAttending(userId) {
+    // Plans this user has RSVP'd to (going/interested) but doesn't own — their
+    // persistent home for accepted invites. The plan stays a single shared doc.
+    userId = checkId(userId)
+    const planCollection = await plans()
+    const list = await planCollection
+      .find({
+        userId: { $ne: new ObjectId(userId) },
+        attendees: {
+          $elemMatch: { userId: new ObjectId(userId), status: { $in: ['going', 'interested'] } }
+        }
+      })
+      .sort({ date: 1 })
+      .toArray()
+    if (list.length === 0) return []
+
+    const userCollection = await users()
+    const ownerIds = [...new Set(list.map((p) => p.userId.toString()))].map((id) => new ObjectId(id))
+    const owners = await userCollection
+      .find({ _id: { $in: ownerIds } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      owners.map((o) => [o._id.toString(), `${o.firstName} ${o.lastName}`.trim()])
+    )
+
+    return list.map((p) => {
+      const me = (p.attendees || []).find((a) => a.userId.toString() === userId)
+      return {
+        _id: p._id.toString(),
+        title: p.title,
+        date: p.date,
+        ownerName: nameById.get(p.userId.toString()) || 'A friend',
+        myStatus: me ? me.status : null
+      }
+    })
+  },
+
+  async getPlanInvitations(userId) {
+    // Plans this user has been invited to but not yet responded to.
+    userId = checkId(userId)
+    const planCollection = await plans()
+    const list = await planCollection
+      .find({ attendees: { $elemMatch: { userId: new ObjectId(userId), status: 'invited' } } })
+      .sort({ date: 1 })
+      .toArray()
+    if (list.length === 0) return []
+
+    const userCollection = await users()
+    const ownerIds = [...new Set(list.map((p) => p.userId.toString()))].map((id) => new ObjectId(id))
+    const owners = await userCollection
+      .find({ _id: { $in: ownerIds } }, { projection: { firstName: 1, lastName: 1 } })
+      .toArray()
+    const nameById = new Map(
+      owners.map((o) => [o._id.toString(), `${o.firstName} ${o.lastName}`.trim()])
+    )
+
+    return list.map((p) => ({
+      _id: p._id.toString(),
+      title: p.title,
+      date: p.date,
+      ownerName: nameById.get(p.userId.toString()) || 'A friend'
+    }))
+  },
+
+  async toggleReaction(planId, userId) {
+    // Toggle a 👍 on a plan. One round-trip to remove; if nothing was removed,
+    // the reaction wasn't there, so add it — same idempotent pattern as favorites.
+    planId = checkId(planId)
+    userId = checkId(userId)
+    await this._findVisiblePlan(planId, userId)
+
+    const planCollection = await plans()
+    const userOid = new ObjectId(userId)
+
+    const pull = await planCollection.updateOne(
+      { _id: new ObjectId(planId), reactions: userOid },
+      { $pull: { reactions: userOid } }
+    )
+    if (pull.modifiedCount === 1) return { reacted: false }
+
+    await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $addToSet: { reactions: userOid } }
+    )
+    return { reacted: true }
+  },
+
+  async addComment(planId, userId, authorName, text) {
+    planId = checkId(planId)
+    userId = checkId(userId)
+    text = checkString(text)
+    if (text.length > 1000) throw { status: 400, message: 'Comment cannot be longer than 1000 characters' }
+    await this._findVisiblePlan(planId, userId)
+
+    const comment = {
+      _id: new ObjectId(),
+      userId: new ObjectId(userId),
+      authorName: typeof authorName === 'string' && authorName.trim() ? authorName.trim() : 'A friend',
+      text,
+      createdAt: new Date()
+    }
+
+    const planCollection = await plans()
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $push: { comments: comment }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 500, message: 'Could not add comment' }
+    return await this.getPlanById(planId)
+  },
+
+  async deletePlanComment(planId, commentId, requester) {
+    // Author, plan owner, or an admin may remove a comment.
+    planId = checkId(planId)
+    commentId = checkId(commentId)
+    if (!requester || requester._id === undefined) throw { status: 400, message: 'Must have a requester' }
+    const requesterId = checkId(requester._id)
+    const isAdmin = requester.role === 'admin'
+
+    const planCollection = await plans()
+    const plan = await planCollection.findOne({ _id: new ObjectId(planId) })
+    if (!plan) throw { status: 404, message: 'Plan not found' }
+
+    const comment = (plan.comments || []).find((c) => c._id.toString() === commentId)
+    if (!comment) throw { status: 404, message: 'Comment not found' }
+
+    const isAuthor = comment.userId.toString() === requesterId
+    const isPlanOwner = plan.userId.toString() === requesterId
+    if (!isAuthor && !isPlanOwner && !isAdmin)
+      throw { status: 403, message: 'You cannot delete this comment' }
+
+    const result = await planCollection.updateOne(
+      { _id: new ObjectId(planId) },
+      { $pull: { comments: { _id: new ObjectId(commentId) } }, $set: { updatedAt: new Date() } }
+    )
+    if (result.modifiedCount === 0) throw { status: 500, message: 'Could not delete comment' }
+    return await this.getPlanById(planId)
   },
 
   async getPlanById(planId) {

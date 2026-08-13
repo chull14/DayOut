@@ -1,0 +1,42 @@
+<h1>Friends' Plans</h1>
+<p class="muted">Public day-outs your friends have shared. Copy one to make it your own.</p>
+
+{{#if invitations.length}}
+<section class="invitations">
+  <h2>You're invited</h2>
+  {{#each invitations}}
+  <div class="invitation">
+    <a href="/plans/{{this._id}}">{{this.title}}</a>
+    <span class="muted">by {{this.ownerName}}{{#if this.date}} &middot; {{this.date}}{{/if}}</span>
+    &mdash; <a href="/plans/{{this._id}}">RSVP</a>
+  </div>
+  {{/each}}
+</section>
+{{/if}}
+
+{{#if attending.length}}
+<section class="attending">
+  <h2>Plans you're attending</h2>
+  {{#each attending}}
+  <div class="attending-plan">
+    <a href="/plans/{{this._id}}">{{this.title}}</a>
+    <span class="muted">by {{this.ownerName}}{{#if this.date}} &middot; {{this.date}}{{/if}} &middot; you're {{this.myStatus}}</span>
+  </div>
+  {{/each}}
+</section>
+{{/if}}
+
+{{#if feedPlans.length}}
+{{#each feedPlans}}
+<div class="feed-plan">
+  <h3><a href="/plans/{{this._id}}">{{this.title}}</a></h3>
+  <p>by <a href="/profile/{{this.userId}}">{{this.authorName}}</a> &middot; {{this.date}} &middot; {{this.activityCount}} stop{{#unless (eq this.activityCount 1)}}s{{/unless}} &middot; &#128077; {{this.reactionCount}} &middot; &#128172; {{this.commentCount}}</p>
+  <form method="POST" action="/plans/{{this._id}}/clone">
+    <button type="submit">Copy to my plans</button>
+  </form>
+</div>
+{{/each}}
+{{else}}
+<p>No plans in your feed yet. Add friends, or wait for them to make a plan public.</p>
+<a href="/friends">Find friends</a>
+{{/if}}
