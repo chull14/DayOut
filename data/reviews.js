@@ -1,6 +1,16 @@
 import { reviews, locations, users } from '../config/mongoCollections.js';
 import { checkId, checkRating, checkString } from '../helpers.js';
 import { ObjectId } from 'mongodb';
+import { computeAndStore } from './recommendations.js';
+
+// Fire-and-forget: a review write changes the author's taste signal, so we
+// recompute their stored recommendations in the background. Never awaited —
+// the review response must not wait on (or fail because of) the AI.
+function refreshRecommendations(userId) {
+  computeAndStore(userId).catch((e) =>
+    console.error('recommendation recompute failed:', e.message)
+  );
+}
 
 async function recomputeLocationAggregates(locationId) {
   const reviewsCol = await reviews();
@@ -64,6 +74,7 @@ export async function createReview({ locationId, userId, rating, reviewText }) {
   }
 
   await recomputeLocationAggregates(locationId);
+  refreshRecommendations(userId);
 
   return await getReviewById(result.insertedId.toString());
 }
@@ -140,6 +151,7 @@ export async function updateReview(reviewId, userId, { rating, reviewText }) {
   if (!result.acknowledged) throw 'Could not update review';
 
   await recomputeLocationAggregates(existing.locationId.toString());
+  refreshRecommendations(userId);
 
   return await getReviewById(reviewId);
 }
@@ -201,6 +213,7 @@ export async function deleteReview(reviewId, requester) {
   if (result.deletedCount !== 1) throw 'Could not delete review';
 
   await recomputeLocationAggregates(existing.locationId.toString());
+  refreshRecommendations(existing.userId.toString());
 
   return { deleted: true, reviewId };
 }

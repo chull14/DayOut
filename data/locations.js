@@ -315,13 +315,12 @@ export async function isFavoritedByUser(userId, locationId) {
   return (user.favoriteLocations || []).some((id) => id.toString() === locationId);
 }
 
-// Recommend locations by scoring each location's type by the user's own
-// 4+ star ratings, then ranking unvisited locations of those types.
-export async function getRecommendationsForUser(userId, limit = 8) {
-  userId = checkId(userId);
-  if (!Number.isInteger(limit) || limit < 1) limit = 8;
-  if (limit > 24) limit = 24;
-
+// Core recommendation engine. Scores each location TYPE by the user's own
+// 4+ star ratings, then returns unvisited, rated locations of those types
+// ranked best-first. Returns the FULL ranked pool (up to poolSize) plus the
+// signal the callers need; slicing is the caller's job.
+//   → { reason: 'based-on-reviews' | 'top-rated', preferredTypes, ranked: [...] }
+async function computeRankedRecommendations(userId, poolSize) {
   const userOid = new ObjectId(userId);
   const reviewsCol = await reviews();
   const locationsCol = await locations();
@@ -329,14 +328,22 @@ export async function getRecommendationsForUser(userId, limit = 8) {
   const userReviews = await reviewsCol.find({ userId: userOid }).toArray();
   const reviewedIds = userReviews.map((r) => r.locationId);
 
-  if (userReviews.length === 0) {
+  // Fallback shared by the "no reviews" and "no strong signal" cases: the
+  // top-rated places the user hasn't already reviewed.
+  const topRated = async () => {
     const fallback = await locationsCol
-      .find({ approved: true, averageRating: { $ne: null } })
+      .find({
+        approved: true,
+        averageRating: { $ne: null },
+        _id: { $nin: reviewedIds }
+      })
       .sort({ averageRating: -1, totalReviews: -1, name: 1 })
-      .limit(limit)
+      .limit(poolSize)
       .toArray();
-    return { reason: 'top-rated', locations: fallback.map(serializeLocation) };
-  }
+    return { reason: 'top-rated', preferredTypes: [], ranked: fallback.map(serializeLocation) };
+  };
+
+  if (userReviews.length === 0) return topRated();
 
   const reviewedLocs = await locationsCol
     .find({ _id: { $in: reviewedIds } })
@@ -352,18 +359,7 @@ export async function getRecommendationsForUser(userId, limit = 8) {
     typeScore.set(t, (typeScore.get(t) || 0) + r.rating);
   }
 
-  if (typeScore.size === 0) {
-    const fallback = await locationsCol
-      .find({
-        approved: true,
-        averageRating: { $ne: null },
-        _id: { $nin: reviewedIds }
-      })
-      .sort({ averageRating: -1, totalReviews: -1, name: 1 })
-      .limit(limit)
-      .toArray();
-    return { reason: 'top-rated', locations: fallback.map(serializeLocation) };
-  }
+  if (typeScore.size === 0) return topRated();
 
   const preferredTypes = [...typeScore.keys()];
 
@@ -389,8 +385,29 @@ export async function getRecommendationsForUser(userId, limit = 8) {
   return {
     reason: 'based-on-reviews',
     preferredTypes,
-    locations: candidates.slice(0, limit).map(serializeLocation)
+    ranked: candidates.slice(0, poolSize).map(serializeLocation)
   };
 }
 
-export { ALLOWED_TYPES };
+// The deterministic recommendation list — used directly when the AI is off,
+// and as the guaranteed fallback when an AI rank fails.
+export async function getRecommendationsForUser(userId, limit = 8) {
+  userId = checkId(userId);
+  if (!Number.isInteger(limit) || limit < 1) limit = 8;
+  if (limit > 24) limit = 24;
+  const { reason, preferredTypes, ranked } = await computeRankedRecommendations(userId, limit);
+  return { reason, preferredTypes, locations: ranked.slice(0, limit) };
+}
+
+// A wider, pre-vetted shortlist (default ~15) handed to the AI re-ranker.
+// Every entry is already a sane, rated, unvisited match — so the AI can
+// curate and order, but can never surface something broken or irrelevant.
+export async function getRecommendationCandidates(userId, limit = 15) {
+  userId = checkId(userId);
+  if (!Number.isInteger(limit) || limit < 1) limit = 15;
+  if (limit > 30) limit = 30;
+  const { reason, preferredTypes, ranked } = await computeRankedRecommendations(userId, limit);
+  return { reason, preferredTypes, candidates: ranked.slice(0, limit) };
+}
+
+export { ALLOWED_TYPES, serializeLocation };

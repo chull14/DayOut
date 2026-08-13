@@ -122,6 +122,77 @@ function parseReasons(text, expectedLength) {
   return arr.map((s) => s.trim());
 }
 
+// ---- AI re-ranker ----------------------------------------------------------
+
+function buildRankPrompt(context, shortlist) {
+  const preferred = (context.preferredTypes || []).join(', ') || 'no clear favorite yet';
+  const lines = shortlist.map((l, i) => {
+    const rating =
+      typeof l.averageRating === 'number' ? `${l.averageRating}★` : 'no rating';
+    const price = l.priceCategory ? `, ${l.priceCategory}` : '';
+    return `${i + 1}. ${l.name} — ${l.type}, ${rating}${price}`;
+  });
+  return [
+    'You curate recommendations for a NYC day-trip app.',
+    `This user tends to enjoy: ${preferred}.`,
+    'From the NUMBERED shortlist below, choose the best matches for this user',
+    'and order them best-first. Pick up to 8; drop weak or redundant options',
+    '(e.g. avoid five near-identical chains). For each chosen place write ONE',
+    'short sentence (max 15 words) on why it suits them — warm, concrete, not salesy.',
+    'Do not mention being an AI. Refer to places ONLY by their number.',
+    'Return ONLY a JSON array of objects like [{"n": 3, "why": "..."}], best first.',
+    '',
+    lines.join('\n')
+  ].join('\n');
+}
+
+// Parse [{n, why}] and map each number back to the real shortlist entry.
+// Anything out of range, duplicated, or malformed is dropped — so the AI can
+// only ever return places that were actually on the vetted shortlist.
+function parseRanking(text, shortlist) {
+  if (!text) return null;
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start === -1 || end === -1 || end < start) return null;
+  let arr;
+  try {
+    arr = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+
+  const seen = new Set();
+  const picks = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const n = Number(item.n);
+    const why = typeof item.why === 'string' ? item.why.trim() : '';
+    if (!Number.isInteger(n) || n < 1 || n > shortlist.length) continue; // invented → drop
+    if (seen.has(n)) continue; // duplicate → drop
+    if (why.length === 0) continue;
+    seen.add(n);
+    picks.push({ ...shortlist[n - 1], why });
+    if (picks.length >= 8) break;
+  }
+  return picks.length ? picks : null;
+}
+
+// Curate + order + explain a vetted shortlist. Returns an ordered array of
+// location objects (each with a `.why`), or null on no-key / error / bad output
+// so the caller can fall back to the deterministic engine order.
+export async function rankRecommendations(context, shortlist) {
+  if (!aiIsConfigured()) return null;
+  if (!Array.isArray(shortlist) || shortlist.length === 0) return null;
+  try {
+    const text = await callAnthropic(buildRankPrompt(context, shortlist));
+    return parseRanking(text, shortlist);
+  } catch (err) {
+    console.error('AI ranking failed, falling back to engine order:', err.message);
+    return null;
+  }
+}
+
 // ---- Public API ------------------------------------------------------------
 
 // Attaches a `.why` string to every location and returns the same array.
